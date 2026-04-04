@@ -1,0 +1,21 @@
+{
+  "name": "xenon-frontend",
+  "version": "1.0.0",
+  "description": "Simple browser frontend for the Xenon backend ventilation checker.",
+  "main": "app.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "three": "^0.135.0",
+    "web-ifc": "^0.0.46",
+    "web-ifc-viewer": "^1.0.218"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.0"
+  }
+}
