@@ -68,6 +68,29 @@ Then run:
 python check_ventilation_rule.py .\\sample1.ifc
 ```
 
+## Run as API (for frontend integration)
+
+Install dependencies:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+Start the API server:
+
+```powershell
+uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+```
+
+Endpoints:
+- `GET /health` -> basic health status
+- `POST /analyze` -> accepts multipart form-data:
+	- `file` (required): IFC file
+	- `recipients` (optional): comma-separated emails; falls back to `REPORT_RECIPIENTS` from `.env`
+	- `email_subject_prefix` (optional): email subject prefix
+
+The endpoint returns a JSON report and sends the same report by email.
+
 You can also pass values via CLI flags:
 
 ```powershell
