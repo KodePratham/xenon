@@ -56,6 +56,10 @@ body {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.75rem;
+  padding: 0.65rem;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.62);
+  border: 1px solid rgba(23, 36, 58, 0.09);
 }
 
 .upload-label {
@@ -71,6 +75,66 @@ body {
   max-width: 16rem;
 }
 
+.viewer-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.viewer-controls button {
+  border: 1px solid rgba(37, 79, 154, 0.3);
+  background: #eff4ff;
+  color: #1f3560;
+  border-radius: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.viewer-controls button:hover {
+  background: #dfe9ff;
+}
+
+.viewer-controls button.is-active {
+  background: #254f9a;
+  border-color: #254f9a;
+  color: #ffffff;
+}
+
+.viewer-controls button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.viewer-advanced-controls {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(10rem, 1fr));
+  gap: 0.65rem;
+  align-items: end;
+}
+
+.viewer-advanced-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.86rem;
+  color: rgba(23, 36, 58, 0.9);
+  font-weight: 600;
+}
+
+.viewer-advanced-controls label:first-child {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.55rem;
+  padding-top: 1.2rem;
+}
+
+.viewer-advanced-controls input[type="range"] {
+  width: 100%;
+  accent-color: #2f66c6;
+}
+
 .viewer-canvas {
   min-height: 68vh;
   border-radius: 0.75rem;
@@ -80,6 +144,23 @@ body {
 }
 
 @media (max-width: 768px) {
+  .viewer-toolbar {
+    align-items: flex-start;
+  }
+
+  .viewer-controls {
+    width: 100%;
+  }
+
+  .viewer-advanced-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .viewer-controls button {
+    flex: 1 1 calc(50% - 0.5rem);
+    min-width: 8rem;
+  }
+
   .viewer-canvas {
     min-height: 58vh;
   }
