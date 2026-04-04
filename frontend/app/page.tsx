@@ -4,12 +4,12 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header>
-        <h1>IFC Architecture Frontend</h1>
-        <p>Next.js + web-ifc-viewer + three.js starter workspace</p>
+        <h1>IFC File Viewer</h1>
+        <p>Upload an IFC file from your machine and preview it in 3D.</p>
       </header>
       <IfcViewer />
       <footer>
-        <small>Tip: start with small IFC files and increase model complexity gradually.</small>
+        <small>Tip: use smaller files first to verify load speed and geometry quality.</small>
       </footer>
       </main>
   );
