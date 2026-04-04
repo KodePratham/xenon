@@ -2,7 +2,47 @@ from __future__ import annotations
 
 from pathlib import Path
 import argparse
+import os
+import smtplib
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from email.message import EmailMessage
 import ifcopenshell
+
+
+@dataclass
+class VentilationReport:
+    ifc_path: Path
+    schema: str
+    rooms_found: int
+    windows_found: int
+    total_room_area: float
+    total_window_area: float
+    ventilation_percent: float
+    spaces_missing_area: int
+    windows_missing_area: int
+    status: str
+    result: str
+    threshold_percent: float = 10.0
+
+
+def load_env_file(env_path: Path) -> None:
+    """Load .env file values into process environment."""
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip("\"'")
+        if key and os.getenv(key) is None:
+            os.environ[key] = value
 
 
 def get_length_scale_to_meters(model) -> float:
@@ -83,27 +123,54 @@ def compute_window_opening_area(window, length_scale_to_m: float) -> float | Non
     return None
 
 
-def evaluate_ventilation(ifc_path: Path) -> None:
+def evaluate_ventilation(ifc_path: Path) -> VentilationReport:
     model = ifcopenshell.open(str(ifc_path))
     spaces = model.by_type("IfcSpace")
     windows = model.by_type("IfcWindow")
     length_scale_to_m = get_length_scale_to_meters(model)
 
-    print(f"File: {ifc_path}")
-    print(f"Schema: {model.schema}")
-    print("Rule: total window opening area >= 10% of total room floor area")
-    print(f"Rooms found (IfcSpace): {len(spaces)}")
-    print(f"Windows found (IfcWindow): {len(windows)}")
-
     if not spaces and not windows:
-        print("Status: No rooms and no windows found in the IFC file.")
-        return
+        return VentilationReport(
+            ifc_path=ifc_path,
+            schema=model.schema,
+            rooms_found=0,
+            windows_found=0,
+            total_room_area=0.0,
+            total_window_area=0.0,
+            ventilation_percent=0.0,
+            spaces_missing_area=0,
+            windows_missing_area=0,
+            status="No rooms and no windows found in the IFC file.",
+            result="FAIL",
+        )
     if not spaces:
-        print("Status: No rooms (IfcSpace) found in the IFC file.")
-        return
+        return VentilationReport(
+            ifc_path=ifc_path,
+            schema=model.schema,
+            rooms_found=0,
+            windows_found=len(windows),
+            total_room_area=0.0,
+            total_window_area=0.0,
+            ventilation_percent=0.0,
+            spaces_missing_area=0,
+            windows_missing_area=0,
+            status="No rooms (IfcSpace) found in the IFC file.",
+            result="FAIL",
+        )
     if not windows:
-        print("Status: No windows (IfcWindow) found in the IFC file.")
-        return
+        return VentilationReport(
+            ifc_path=ifc_path,
+            schema=model.schema,
+            rooms_found=len(spaces),
+            windows_found=0,
+            total_room_area=0.0,
+            total_window_area=0.0,
+            ventilation_percent=0.0,
+            spaces_missing_area=0,
+            windows_missing_area=0,
+            status="No windows (IfcWindow) found in the IFC file.",
+            result="FAIL",
+        )
 
     room_areas: list[float] = []
     spaces_missing_area = 0
@@ -127,24 +194,179 @@ def evaluate_ventilation(ifc_path: Path) -> None:
     total_window_area = sum(window_areas)
 
     if total_room_area <= 0:
-        print("Status: Unable to evaluate rule because room floor area could not be determined.")
-        print(f"Spaces missing area quantity: {spaces_missing_area} / {len(spaces)}")
-        return
+        return VentilationReport(
+            ifc_path=ifc_path,
+            schema=model.schema,
+            rooms_found=len(spaces),
+            windows_found=len(windows),
+            total_room_area=0.0,
+            total_window_area=total_window_area,
+            ventilation_percent=0.0,
+            spaces_missing_area=spaces_missing_area,
+            windows_missing_area=windows_missing_area,
+            status="Unable to evaluate rule because room floor area could not be determined.",
+            result="FAIL",
+        )
 
     if total_window_area <= 0:
-        print("Status: Rule failed because total measurable window opening area is zero.")
-        print(f"Windows missing area quantity/dimensions: {windows_missing_area} / {len(windows)}")
-        return
+        return VentilationReport(
+            ifc_path=ifc_path,
+            schema=model.schema,
+            rooms_found=len(spaces),
+            windows_found=len(windows),
+            total_room_area=total_room_area,
+            total_window_area=0.0,
+            ventilation_percent=0.0,
+            spaces_missing_area=spaces_missing_area,
+            windows_missing_area=windows_missing_area,
+            status="Rule failed because total measurable window opening area is zero.",
+            result="FAIL",
+        )
 
     ventilation_percent = (total_window_area / total_room_area) * 100.0
     passes_rule = ventilation_percent >= 10.0
 
-    print(f"Total room floor area: {total_room_area:.3f} m^2")
-    print(f"Total window opening area: {total_window_area:.3f} m^2")
-    print(f"Ventilation ratio: {ventilation_percent:.2f}%")
-    print(f"Spaces missing area quantity: {spaces_missing_area} / {len(spaces)}")
-    print(f"Windows missing area quantity/dimensions: {windows_missing_area} / {len(windows)}")
-    print(f"Result: {'PASS' if passes_rule else 'FAIL'} (threshold: 10.00%)")
+    return VentilationReport(
+        ifc_path=ifc_path,
+        schema=model.schema,
+        rooms_found=len(spaces),
+        windows_found=len(windows),
+        total_room_area=total_room_area,
+        total_window_area=total_window_area,
+        ventilation_percent=ventilation_percent,
+        spaces_missing_area=spaces_missing_area,
+        windows_missing_area=windows_missing_area,
+        status="Evaluation completed successfully.",
+        result="PASS" if passes_rule else "FAIL",
+    )
+
+
+def report_to_text(report: VentilationReport) -> str:
+    lines = [
+        f"File: {report.ifc_path}",
+        f"Schema: {report.schema}",
+        "Rule: total window opening area >= 10% of total room floor area",
+        f"Rooms found (IfcSpace): {report.rooms_found}",
+        f"Windows found (IfcWindow): {report.windows_found}",
+        f"Status: {report.status}",
+        f"Total room floor area: {report.total_room_area:.3f} m^2",
+        f"Total window opening area: {report.total_window_area:.3f} m^2",
+        f"Ventilation ratio: {report.ventilation_percent:.2f}%",
+        f"Spaces missing area quantity: {report.spaces_missing_area} / {report.rooms_found}",
+        f"Windows missing area quantity/dimensions: {report.windows_missing_area} / {report.windows_found}",
+        f"Result: {report.result} (threshold: {report.threshold_percent:.2f}%)",
+    ]
+    return "\n".join(lines)
+
+
+def report_to_html(report: VentilationReport, generated_at: str) -> str:
+    result_color = "#1f7a1f" if report.result == "PASS" else "#b30000"
+    return f"""<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Ventilation Rule Report</title>
+  </head>
+  <body style="font-family: 'Segoe UI', Arial, sans-serif; background:#f6f8fb; margin:0; padding:24px; color:#1f2937;">
+    <table role="presentation" width="100%" cellspacing="0" cellpadding="0">
+      <tr>
+        <td align="center">
+          <table role="presentation" width="720" cellspacing="0" cellpadding="0" style="max-width:720px; background:#ffffff; border:1px solid #e5e7eb; border-radius:12px; overflow:hidden;">
+            <tr>
+              <td style="padding:22px 28px; background:#0f172a; color:#ffffff;">
+                <h1 style="margin:0; font-size:20px;">Ventilation Rule Compliance Report</h1>
+                <p style="margin:8px 0 0 0; font-size:13px; color:#cbd5e1;">Generated at {generated_at}</p>
+              </td>
+            </tr>
+            <tr>
+              <td style="padding:24px 28px;">
+                <p style="margin:0 0 14px 0; font-size:15px;"><strong>Overall Result:</strong> <span style="color:{result_color}; font-weight:700;">{report.result}</span></p>
+                <p style="margin:0 0 20px 0; font-size:14px; color:#374151;">{report.status}</p>
+                <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="border-collapse:collapse; font-size:14px;">
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc; width:45%;"><strong>IFC File</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.ifc_path}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Schema</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.schema}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Rooms Found (IfcSpace)</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.rooms_found}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Windows Found (IfcWindow)</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.windows_found}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Total Room Floor Area</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.total_room_area:.3f} m^2</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Total Window Opening Area</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.total_window_area:.3f} m^2</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Ventilation Ratio</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.ventilation_percent:.2f}% (threshold {report.threshold_percent:.2f}%)</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Spaces Missing Area</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.spaces_missing_area} / {report.rooms_found}</td>
+                  </tr>
+                  <tr>
+                    <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Windows Missing Area</strong></td>
+                    <td style="padding:10px; border:1px solid #e5e7eb;">{report.windows_missing_area} / {report.windows_found}</td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+
+
+def parse_recipients(raw_recipients: list[str]) -> list[str]:
+    recipients: list[str] = []
+    for item in raw_recipients:
+        recipients.extend([email.strip() for email in item.split(",") if email.strip()])
+    return recipients
+
+
+def send_report_email(report: VentilationReport, args: argparse.Namespace) -> None:
+    recipients = parse_recipients(args.email_to)
+    if not recipients:
+        raise ValueError("At least one recipient email is required. Use --email-to or REPORT_RECIPIENTS.")
+
+    if not args.smtp_username:
+        raise ValueError("SMTP username is required. Use --smtp-username or SMTP_USERNAME.")
+
+    if not args.smtp_password:
+        raise ValueError("SMTP password is required. Use --smtp-password or SMTP_PASSWORD.")
+
+    from_email = args.from_email or args.smtp_username
+    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    subject = f"{args.email_subject_prefix} | {report.result} | {report.ifc_path.name}"
+
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = from_email
+    message["To"] = ", ".join(recipients)
+    message.set_content(report_to_text(report))
+    message.add_alternative(report_to_html(report, generated_at), subtype="html")
+
+    with smtplib.SMTP(args.smtp_host, args.smtp_port, timeout=30) as smtp:
+        smtp.ehlo()
+        if args.smtp_use_starttls:
+            smtp.starttls()
+            smtp.ehlo()
+        smtp.login(args.smtp_username, args.smtp_password)
+        smtp.send_message(message)
 
 
 def parse_args() -> argparse.Namespace:
@@ -152,15 +374,59 @@ def parse_args() -> argparse.Namespace:
         description="Check IFC model against a 10% natural ventilation rule (window area vs room floor area)."
     )
     parser.add_argument("ifc_file", help="Path to IFC file")
+    parser.add_argument("--smtp-host", default=os.getenv("SMTP_HOST", "smtp.gmail.com"), help="SMTP host")
+    parser.add_argument(
+        "--smtp-port",
+        type=int,
+        default=int(os.getenv("SMTP_PORT", "587")),
+        help="SMTP port",
+    )
+    parser.add_argument(
+        "--smtp-username",
+        default=os.getenv("SMTP_USERNAME"),
+        help="SMTP username (for Gmail, your full gmail address)",
+    )
+    parser.add_argument(
+        "--smtp-password",
+        default=os.getenv("SMTP_PASSWORD"),
+        help="SMTP password or app password",
+    )
+    parser.add_argument(
+        "--from-email",
+        default=os.getenv("SMTP_FROM_EMAIL"),
+        help="Sender email. Defaults to SMTP username if omitted.",
+    )
+    parser.add_argument(
+        "--email-to",
+        nargs="+",
+        default=(os.getenv("REPORT_RECIPIENTS", "").split(",") if os.getenv("REPORT_RECIPIENTS") else []),
+        help="One or more recipient addresses (space-separated and/or comma-separated)",
+    )
+    parser.add_argument(
+        "--email-subject-prefix",
+        default=os.getenv("REPORT_SUBJECT_PREFIX", "Xenon Ventilation Report"),
+        help="Prefix used in the email subject",
+    )
+    parser.add_argument(
+        "--smtp-use-starttls",
+        action=argparse.BooleanOptionalAction,
+        default=(os.getenv("SMTP_USE_STARTTLS", "true").lower() in {"1", "true", "yes", "y"}),
+        help="Enable STARTTLS for SMTP connection (recommended)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
+    load_env_file(Path(__file__).with_name(".env"))
     args = parse_args()
     ifc_path = Path(args.ifc_file)
     if not ifc_path.exists():
         raise FileNotFoundError(f"IFC file not found: {ifc_path}")
-    evaluate_ventilation(ifc_path)
+
+    report = evaluate_ventilation(ifc_path)
+    print(report_to_text(report))
+    send_report_email(report, args)
+    print(f"Email report sent to: {', '.join(parse_recipients(args.email_to))}")
 
 
 if __name__ == "__main__":

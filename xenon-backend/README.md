@@ -44,6 +44,38 @@ python inspect_ifc.py --list-types 30
 python check_ventilation_rule.py path\\to\\model.ifc
 ```
 
+The script now sends a professional email report (PASS/FAIL + detailed metrics) every time it runs.
+
+### Quick SMTP configuration with `.env` (recommended)
+
+1. Copy `.env.example` to `.env`.
+2. Fill your real Gmail/app-password/recipient values.
+
+Example `.env`:
+
+```dotenv
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USE_STARTTLS=true
+SMTP_USERNAME=your_email@gmail.com
+SMTP_PASSWORD=your_16_char_app_password
+REPORT_RECIPIENTS=alice@example.com,bob@example.com
+```
+
+Then run:
+
+```powershell
+python check_ventilation_rule.py .\\sample1.ifc
+```
+
+You can also pass values via CLI flags:
+
+```powershell
+python check_ventilation_rule.py .\\sample1.ifc --email-to alice@example.com bob@example.com --smtp-username your_email@gmail.com --smtp-password your_16_char_app_password
+```
+
+For complete Gmail setup instructions (2FA + App Password), see `GMAIL_SMTP_SETUP.md`.
+
 What it checks:
 - Total window opening area
 - Total room floor area (from `IfcSpace` quantities)
