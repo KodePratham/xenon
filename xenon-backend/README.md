@@ -88,8 +88,19 @@ Endpoints:
 	- `file` (required): IFC file
 	- `recipients` (optional): comma-separated emails; falls back to `REPORT_RECIPIENTS` from `.env`
 	- `email_subject_prefix` (optional): email subject prefix
+- `POST /try-fix-ai` -> runs AI window resizing fix, saves a new IFC, emails the fixed IFC, and returns fixed model payload for frontend preview
+	- `file` (required): IFC file
+	- `recipients` (optional): comma-separated emails; falls back to `REPORT_RECIPIENTS` from `.env`
+	- `email_subject_prefix` (optional): email subject prefix for fix email
 
 The endpoint returns a JSON report and sends the same report by email.
+
+For AI fix mode, configure Groq in `.env`:
+
+```dotenv
+GROQ_API_KEY=your_groq_api_key
+GROQ_MODEL=llama-3.3-70b-versatile
+```
 
 You can also pass values via CLI flags:
 
