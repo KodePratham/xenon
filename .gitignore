@@ -65,6 +65,9 @@ ENV/
 xenon-backend/.env
 xenon-backend/.env.*
 !xenon-backend/.env.example
+xenon-bot/.env
+xenon-bot/.env.*
+!xenon-bot/.env.example
 
 # ------------------------------
 # Node / Vite (frontend)

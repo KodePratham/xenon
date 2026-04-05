@@ -23,6 +23,11 @@ xenon-one-shot-try/
 │   ├── check_ventilation_rule.py  # Core ventilation logic
 │   ├── .env.example          # SMTP config template
 │   └── requirements.txt      # Python dependencies
+│
+├── xenon-bot/                # Telegram bot (IFC upload -> report)
+│   ├── bot.py                # Telegram polling bot
+│   ├── .env.example          # Bot token and backend URL template
+│   └── requirements.txt      # Bot dependencies
 ```
 
 ---
@@ -57,6 +62,23 @@ API runs at **http://localhost:8000**.
 3. Restart the backend
 
 Without `.env`, reports still generate — email sending is skipped gracefully.
+
+### 4. Telegram Bot (No 3D, report only)
+
+The Telegram bot reuses the backend analysis endpoint so report behavior matches the app.
+
+```powershell
+cd xenon-one-shot-try\xenon-bot
+python -m pip install -r requirements.txt
+copy .env.example .env
+python bot.py
+```
+
+Required bot env values:
+- `TELEGRAM_BOT_TOKEN`
+- `BACKEND_API_URL` (usually `http://127.0.0.1:8000` for local development)
+
+Then open your bot in Telegram and upload an `.ifc` document to receive the report and AI suggestions.
 
 ---
 
