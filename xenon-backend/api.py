@@ -4,10 +4,12 @@ import os
 import json
 import asyncio
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from types import SimpleNamespace
 
+import ifcopenshell
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -80,6 +82,75 @@ def report_from_payload(payload: dict, source_filename: str = "upload.ifc") -> V
         threshold_percent=float(payload.get("threshold_percent", 10.0)),
         window_ids=list(payload.get("window_ids") or []),
     )
+
+
+def _safe_ifc_value(value):
+    """Convert IFC values into JSON-safe structures."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+
+    # ifcopenshell entity instance
+    if hasattr(value, "is_a") and hasattr(value, "id"):
+        name = ""
+        try:
+            name = value.Name
+        except Exception:
+            name = ""
+        return {
+            "ref": value.id(),
+            "type": value.is_a(),
+            "name": name,
+        }
+
+    if isinstance(value, (list, tuple)):
+        return [_safe_ifc_value(item) for item in value]
+
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="replace")
+
+    return str(value)
+
+
+def extract_ifc_json(ifc_path: Path, max_entities: int = 1500) -> dict:
+    model = ifcopenshell.open(str(ifc_path))
+    entities = model.by_type("IfcRoot")
+    extracted = []
+
+    for entity in entities[:max_entities]:
+        item = {
+            "id": entity.id(),
+            "type": entity.is_a(),
+            "global_id": getattr(entity, "GlobalId", None),
+            "name": getattr(entity, "Name", None),
+            "description": getattr(entity, "Description", None),
+            "attributes": {},
+        }
+
+        for index, attr_name in enumerate(entity.attribute_name(i) for i in range(len(entity))):
+            try:
+                value = entity[index]
+            except Exception:
+                value = None
+            item["attributes"][attr_name] = _safe_ifc_value(value)
+
+        extracted.append(item)
+
+    type_counts: dict[str, int] = {}
+    for entity in entities:
+        entity_type = entity.is_a()
+        type_counts[entity_type] = type_counts.get(entity_type, 0) + 1
+
+    return {
+        "source_filename": ifc_path.name,
+        "schema": model.schema,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "total_root_entities": len(entities),
+        "included_entities": len(extracted),
+        "truncated": len(entities) > max_entities,
+        "max_entities": max_entities,
+        "entity_type_counts": dict(sorted(type_counts.items(), key=lambda kv: kv[0])),
+        "entities": extracted,
+    }
 
 
 async def generate_suggestions(report) -> list[dict]:
@@ -342,3 +413,44 @@ async def send_email(
         raise HTTPException(status_code=400, detail=f"Invalid report_json: {decode_error}") from decode_error
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/extract-json")
+async def extract_json(
+    file: UploadFile = File(...),
+    max_entities: int = Form(1500),
+) -> dict:
+    if file is None:
+        raise HTTPException(status_code=400, detail="Please upload a file.")
+
+    temp_path: Path | None = None
+    try:
+        payload = await file.read()
+        if not payload:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+        upload_name = (file.filename or "upload.ifc").strip() or "upload.ifc"
+        suffix = Path(upload_name).suffix or ".ifc"
+        with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            temp_file.write(payload)
+            temp_path = Path(temp_file.name)
+
+        if max_entities <= 0:
+            max_entities = 1
+
+        try:
+            extracted = extract_ifc_json(temp_path, max_entities=max_entities)
+            extracted["source_filename"] = upload_name
+            return {"ok": True, "data": extracted}
+        except Exception as parse_exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Uploaded file could not be parsed as IFC: {parse_exc}",
+            ) from parse_exc
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if temp_path and temp_path.exists():
+            temp_path.unlink(missing_ok=True)

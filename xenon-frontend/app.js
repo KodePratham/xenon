@@ -13,11 +13,16 @@ const dropZone = document.getElementById("drop-zone");
 const fileInput = document.getElementById("ifc-input");
 const selectedFileEl = document.getElementById("selected-file");
 const runReportBtn = document.getElementById("run-report");
+const extractJsonBtn = document.getElementById("extract-json");
 const statusEl = document.getElementById("status");
 const reportContainer = document.getElementById("report");
 const reportGrid = document.getElementById("report-grid");
 const suggestionsEl = document.getElementById("suggestions");
 const reportText = document.getElementById("report-text");
+const jsonPanel = document.getElementById("json-panel");
+const jsonMeta = document.getElementById("json-meta");
+const jsonPreview = document.getElementById("json-preview");
+const downloadJsonBtn = document.getElementById("download-json");
 const viewerContainer = document.getElementById("viewer-container");
 const apiUrlInput = document.getElementById("api-url");
 const emailsInput = document.getElementById("emails");
@@ -26,6 +31,7 @@ const subjectPrefixInput = document.getElementById("subject-prefix");
 let selectedFile = null;
 let scene, camera, renderer, controls;
 let viewerInitialized = false;
+let extractedIfcJson = null;
 
 function setStatus(msg, kind) {
   statusEl.textContent = msg;
@@ -353,6 +359,42 @@ async function sendComplianceEmail({
   return data;
 }
 
+function downloadTextFile(filename, content) {
+  const blob = new Blob([content], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+async function extractIfcJson(apiBase, file) {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("max_entities", "1500");
+  const response = await fetch(apiBase + "/extract-json", {
+    method: "POST",
+    body: fd,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "IFC JSON extraction failed");
+  }
+  return data.data;
+}
+
+function renderJsonPanel(data) {
+  const pretty = JSON.stringify(data, null, 2);
+  extractedIfcJson = pretty;
+  jsonMeta.textContent = "Schema: " + data.schema + " | Included entities: " + data.included_entities + " / " + data.total_root_entities + (data.truncated ? " (truncated)" : "");
+  jsonPreview.textContent = pretty.slice(0, 25000);
+  jsonPanel.classList.remove("hidden");
+  downloadJsonBtn.disabled = false;
+}
+
 runReportBtn.addEventListener("click", async () => {
   if (!selectedFile) { setStatus("Upload an IFC file first.", "error"); return; }
   const apiBase = apiUrlInput.value.trim().replace(/\/$/, "");
@@ -392,6 +434,33 @@ runReportBtn.addEventListener("click", async () => {
     console.error(err);
     setStatus("Request failed: " + err.message, "error");
   }
+});
+
+extractJsonBtn.addEventListener("click", async () => {
+  if (!selectedFile) { setStatus("Upload an IFC file first.", "error"); return; }
+  const apiBase = apiUrlInput.value.trim().replace(/\/$/, "");
+  if (!apiBase) { setStatus("Provide the backend API URL.", "error"); return; }
+
+  setStatus("Extracting IFC JSON...", "running");
+  downloadJsonBtn.disabled = true;
+  try {
+    const data = await extractIfcJson(apiBase, selectedFile);
+    renderJsonPanel(data);
+    setStatus("IFC JSON extracted. Preview ready, download enabled.", "success");
+  } catch (err) {
+    console.error(err);
+    setStatus("JSON extraction failed: " + err.message, "error");
+  }
+});
+
+downloadJsonBtn.addEventListener("click", () => {
+  if (!extractedIfcJson) {
+    setStatus("No JSON available to download yet.", "error");
+    return;
+  }
+  const baseName = (selectedFile?.name || "ifc-model").replace(/\.ifc$/i, "");
+  downloadTextFile(baseName + ".parsed.json", extractedIfcJson);
+  setStatus("JSON downloaded.", "success");
 });
 
 /* ─── Fullscreen toggle (browser Fullscreen API) ─── */
