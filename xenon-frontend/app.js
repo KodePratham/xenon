@@ -16,6 +16,73 @@ let viewer = null;
 let currentModelId = null;
 let viewerLibraryLoadPromise = null;
 
+function getErrorMessage(error) {
+  if (!error) {
+    return "Unknown IFC loader error.";
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error.message) {
+    return error.message;
+  }
+
+  try {
+    return JSON.stringify(error);
+  } catch {
+    return String(error);
+  }
+}
+
+function getModelIdFromResult(model) {
+  if (!model || typeof model !== "object") {
+    return null;
+  }
+
+  if (typeof model.modelID === "number") {
+    return model.modelID;
+  }
+
+  if (typeof model.modelId === "number") {
+    return model.modelId;
+  }
+
+  if (typeof model.id === "number") {
+    return model.id;
+  }
+
+  return null;
+}
+
+function getFallbackModelIdFromManager() {
+  const models = viewer?.IFC?.loader?.ifcManager?.state?.models;
+  if (!models || typeof models !== "object") {
+    return null;
+  }
+
+  const modelIds = Object.keys(models)
+    .map((id) => Number(id))
+    .filter((id) => Number.isFinite(id));
+
+  if (!modelIds.length) {
+    return null;
+  }
+
+  return Math.max(...modelIds);
+}
+
+function getFallbackModelIdFromContext() {
+  const ifcModels = viewer?.context?.items?.ifcModels;
+  if (!Array.isArray(ifcModels) || !ifcModels.length) {
+    return null;
+  }
+
+  const lastModel = ifcModels[ifcModels.length - 1];
+  return getModelIdFromResult(lastModel);
+}
+
 function getViewerCtor() {
   if (window.IFCViewerAPI) {
     return window.IFCViewerAPI;
@@ -26,6 +93,10 @@ function getViewerCtor() {
   }
 
   return null;
+}
+
+function getAbsoluteWasmBasePath() {
+  return new URL("./vendor/web-ifc/", window.location.href).href;
 }
 
 function loadScript(url) {
@@ -112,24 +183,57 @@ async function initViewerIfNeeded() {
   });
   viewer.axes.setAxes();
   viewer.grid.setGrid();
-  await viewer.IFC.setWasmPath("./vendor/web-ifc/");
+
+  const wasmBasePath = getAbsoluteWasmBasePath();
+  await viewer.IFC.setWasmPath(wasmBasePath);
+
+  // Some web-ifc builds resolve wasm relative to internal blob URLs unless absolute mode is set.
+  const ifcApi = viewer?.IFC?.loader?.ifcManager?.ifcAPI;
+  if (ifcApi?.SetWasmPath) {
+    ifcApi.SetWasmPath(wasmBasePath, true);
+  }
 }
 
 async function loadIfcPreview(file) {
   await initViewerIfNeeded();
+  let loaderErrorMessage = null;
 
   if (currentModelId !== null) {
     try {
-      viewer.IFC.loader.ifcManager.close(currentModelId, true);
+      const manager = viewer?.IFC?.loader?.ifcManager;
+      if (manager?.close) {
+        manager.close(currentModelId, true);
+      }
     } catch (err) {
       console.warn("Could not close previous model:", err);
+    } finally {
+      currentModelId = null;
     }
   }
 
   const objectUrl = URL.createObjectURL(file);
   try {
-    const model = await viewer.IFC.loadIfcUrl(objectUrl);
-    currentModelId = model.modelID;
+    const onViewerError = (error) => {
+      loaderErrorMessage = getErrorMessage(error);
+      console.error("IFC viewer loading error:", error);
+    };
+
+    let model = await viewer.IFC.loadIfcUrl(objectUrl, false, undefined, onViewerError);
+
+    // Some viewer builds are more stable with File-based loading than URL-based loading.
+    if (!model) {
+      model = await viewer.IFC.loadIfc(file, false, onViewerError);
+    }
+
+    const modelId =
+      getModelIdFromResult(model) ?? getFallbackModelIdFromContext() ?? getFallbackModelIdFromManager();
+
+    if (modelId === null) {
+      const rootCause = loaderErrorMessage ? ` Root cause: ${loaderErrorMessage}` : "";
+      throw new Error(`Viewer loaded no IFC model. Ensure local web-ifc runtime files are served correctly.${rootCause}`);
+    }
+
+    currentModelId = modelId;
   } finally {
     URL.revokeObjectURL(objectUrl);
   }

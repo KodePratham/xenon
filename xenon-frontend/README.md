@@ -20,14 +20,14 @@ uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 2. Install frontend dependencies once (required for local IFC viewer bundle/tooling files):
 
 ```powershell
-cd d:\Hackathons\xenon\xenon-frontend
+cd xenon-frontend
 npm install
 ```
 
 3. Serve this folder as static files (any local static server works). Example using Python:
 
 ```powershell
-cd d:\Hackathons\xenon\xenon-frontend
+cd xenon-frontend
 python -m http.server 5500
 ```
 
