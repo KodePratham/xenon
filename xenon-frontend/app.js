@@ -12,63 +12,9 @@ const emailsInput = document.getElementById("emails");
 const subjectPrefixInput = document.getElementById("subject-prefix");
 
 let selectedFile = null;
-let viewer = null;
-let currentModelId = null;
-let viewerLibraryLoadPromise = null;
-
-function getViewerCtor() {
-  if (window.IFCViewerAPI) {
-    return window.IFCViewerAPI;
-  }
-
-  if (window.WebIFCViewer && window.WebIFCViewer.IFCViewerAPI) {
-    return window.WebIFCViewer.IFCViewerAPI;
-  }
-
-  return null;
-}
-
-function loadScript(url) {
-  return new Promise((resolve, reject) => {
-    const script = document.createElement("script");
-    script.src = url;
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => reject(new Error(`Failed to load script: ${url}`));
-    document.head.appendChild(script);
-  });
-}
-
-async function ensureViewerLibraryLoaded() {
-  if (getViewerCtor()) {
-    return;
-  }
-
-  if (!viewerLibraryLoadPromise) {
-    viewerLibraryLoadPromise = (async () => {
-      const candidateUrls = [
-        "./vendor/ifc-viewer.bundle.js",
-        "https://unpkg.com/web-ifc-viewer@1.0.218/dist/IFCViewerAPI.js",
-        "https://cdn.jsdelivr.net/npm/web-ifc-viewer@1.0.218/dist/IFCViewerAPI.js",
-      ];
-
-      for (const url of candidateUrls) {
-        try {
-          await loadScript(url);
-          if (getViewerCtor()) {
-            return;
-          }
-        } catch (error) {
-          console.warn(error);
-        }
-      }
-
-      throw new Error("IFC viewer library could not be loaded (local bundle and CDN failed).");
-    })();
-  }
-
-  return viewerLibraryLoadPromise;
-}
+let fallbackFrame = null;
+let iframeReadyPromise = null;
+const iframeViewerUrl = "./viewer-fallback.html";
 
 function setStatus(message, kind = "idle") {
   statusEl.textContent = message;
@@ -96,43 +42,93 @@ function renderReport(report) {
   });
 }
 
-async function initViewerIfNeeded() {
-  if (viewer) {
+function ensureIframeViewer() {
+  if (fallbackFrame) {
     return;
   }
 
-  await ensureViewerLibraryLoaded();
-  const ViewerCtor = getViewerCtor();
-  if (!ViewerCtor) {
-    throw new Error("IFC viewer library not loaded.");
+  viewerContainer.innerHTML = "";
+  fallbackFrame = document.createElement("iframe");
+  fallbackFrame.src = iframeViewerUrl;
+  fallbackFrame.title = "IFC Preview";
+  fallbackFrame.style.width = "100%";
+  fallbackFrame.style.height = "100%";
+  fallbackFrame.style.border = "0";
+  fallbackFrame.setAttribute("loading", "eager");
+  viewerContainer.appendChild(fallbackFrame);
+}
+
+function waitForIframeReady() {
+  if (iframeReadyPromise) {
+    return iframeReadyPromise;
   }
 
-  viewer = new ViewerCtor({
-    container: viewerContainer,
+  ensureIframeViewer();
+  iframeReadyPromise = new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("Embedded IFC viewer did not initialize in time."));
+    }, 15000);
+
+    function onMessage(event) {
+      if (event.source !== fallbackFrame.contentWindow || !event.data) {
+        return;
+      }
+
+      if (event.data.type === "viewer-fallback-ready") {
+        clearTimeout(timeout);
+        window.removeEventListener("message", onMessage);
+        resolve();
+      }
+    }
+
+    window.addEventListener("message", onMessage);
   });
-  viewer.axes.setAxes();
-  viewer.grid.setGrid();
-  await viewer.IFC.setWasmPath("./vendor/web-ifc/");
+
+  return iframeReadyPromise;
 }
 
 async function loadIfcPreview(file) {
-  await initViewerIfNeeded();
+  await waitForIframeReady();
+  const buffer = await file.arrayBuffer();
 
-  if (currentModelId !== null) {
-    try {
-      viewer.IFC.loader.ifcManager.close(currentModelId, true);
-    } catch (err) {
-      console.warn("Could not close previous model:", err);
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("Embedded viewer load timed out."));
+    }, 30000);
+
+    function cleanup() {
+      clearTimeout(timeout);
+      window.removeEventListener("message", onMessage);
     }
-  }
 
-  const objectUrl = URL.createObjectURL(file);
-  try {
-    const model = await viewer.IFC.loadIfcUrl(objectUrl);
-    currentModelId = model.modelID;
-  } finally {
-    URL.revokeObjectURL(objectUrl);
-  }
+    function onMessage(event) {
+      if (event.source !== fallbackFrame.contentWindow || !event.data) {
+        return;
+      }
+
+      if (event.data.type === "viewer-fallback-loaded") {
+        cleanup();
+        resolve();
+      }
+
+      if (event.data.type === "viewer-fallback-error") {
+        cleanup();
+        reject(new Error(event.data.message || "Embedded viewer failed to load IFC."));
+      }
+    }
+
+    window.addEventListener("message", onMessage);
+    fallbackFrame.contentWindow.postMessage(
+      {
+        type: "load-ifc-buffer",
+        name: file.name,
+        buffer,
+      },
+      "*",
+      [buffer],
+    );
+  });
 }
 
 async function handleFile(file) {

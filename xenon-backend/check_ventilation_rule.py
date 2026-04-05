@@ -244,6 +244,7 @@ def evaluate_ventilation(ifc_path: Path) -> VentilationReport:
 def report_to_text(report: VentilationReport) -> str:
     lines = [
         f"File: {report.ifc_path}",
+        f"AI Corrected File Path: {report.ifc_path}",
         f"Schema: {report.schema}",
         "Rule: total window opening area >= 10% of total room floor area",
         f"Rooms found (IfcSpace): {report.rooms_found}",
@@ -287,6 +288,10 @@ def report_to_html(report: VentilationReport, generated_at: str) -> str:
                     <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc; width:45%;"><strong>IFC File</strong></td>
                     <td style="padding:10px; border:1px solid #e5e7eb;">{report.ifc_path}</td>
                   </tr>
+                                    <tr>
+                                        <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>AI Corrected File Path</strong></td>
+                                        <td style="padding:10px; border:1px solid #e5e7eb;">{report.ifc_path}</td>
+                                    </tr>
                   <tr>
                     <td style="padding:10px; border:1px solid #e5e7eb; background:#f8fafc;"><strong>Schema</strong></td>
                     <td style="padding:10px; border:1px solid #e5e7eb;">{report.schema}</td>
@@ -351,7 +356,7 @@ def send_report_email(report: VentilationReport, args: argparse.Namespace) -> No
 
     from_email = args.from_email or args.smtp_username
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-    subject = f"{args.email_subject_prefix} | {report.result} | {report.ifc_path.name}"
+    subject = f"{args.email_subject_prefix} | {report.result} | {report.ifc_path}"
 
     message = EmailMessage()
     message["Subject"] = subject

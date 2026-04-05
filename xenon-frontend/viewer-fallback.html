@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IFC Fallback Viewer</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #d9dde3;
+        font-family: Arial, sans-serif;
+      }
+
+      #viewer {
+        width: 100%;
+        height: 100%;
+      }
+
+      #hint {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        z-index: 10;
+        background: rgba(0, 0, 0, 0.65);
+        color: #fff;
+        padding: 8px 10px;
+        border-radius: 8px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hint">IFC fallback viewer (CDN Three.js + web-ifc)</div>
+    <div id="viewer"></div>
+
+    <script type="module">
+      import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.135.0/build/three.module.js";
+      import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.135.0/examples/jsm/controls/OrbitControls.js";
+      import { IFCLoader } from "https://cdn.jsdelivr.net/npm/web-ifc-three@0.0.118/IFCLoader.js";
+
+      const container = document.getElementById("viewer");
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xd9dde3);
+
+      const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 2000);
+      camera.position.set(14, 14, 14);
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(container.clientWidth, container.clientHeight);
+      container.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+
+      const ambient = new THREE.AmbientLight(0xffffff, 0.7);
+      scene.add(ambient);
+      const directional = new THREE.DirectionalLight(0xffffff, 0.8);
+      directional.position.set(15, 25, 10);
+      scene.add(directional);
+
+      const grid = new THREE.GridHelper(60, 60, 0x777777, 0xaaaaaa);
+      scene.add(grid);
+
+      const ifcLoader = new IFCLoader();
+      await ifcLoader.ifcManager.setWasmPath("https://cdn.jsdelivr.net/npm/web-ifc@0.0.46/");
+      if (ifcLoader.ifcManager.useWebWorkers) {
+        ifcLoader.ifcManager.useWebWorkers(false);
+      }
+
+      let currentModel = null;
+
+      function frameModel(model) {
+        if (!model || !model.geometry) {
+          return;
+        }
+
+        model.geometry.computeBoundingBox();
+        const box = model.geometry.boundingBox;
+        const size = box.getSize(new THREE.Vector3()).length() || 10;
+        const center = box.getCenter(new THREE.Vector3());
+
+        controls.target.copy(center);
+        camera.position.set(center.x + size * 0.8, center.y + size * 0.6, center.z + size * 0.8);
+        controls.update();
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+        controls.update();
+        renderer.render(scene, camera);
+      }
+      animate();
+
+      window.addEventListener("resize", () => {
+        const width = container.clientWidth || window.innerWidth;
+        const height = container.clientHeight || window.innerHeight;
+        camera.aspect = width / height;
+        camera.updateProjectionMatrix();
+        renderer.setSize(width, height);
+      });
+
+      window.addEventListener("message", async (event) => {
+        if (!event.data || event.data.type !== "load-ifc-buffer") {
+          return;
+        }
+
+        try {
+          const { buffer } = event.data;
+          if (!(buffer instanceof ArrayBuffer)) {
+            throw new Error("Invalid IFC buffer payload.");
+          }
+
+          if (currentModel) {
+            scene.remove(currentModel);
+            currentModel = null;
+          }
+
+          const blob = new Blob([buffer], { type: "application/octet-stream" });
+          const objectUrl = URL.createObjectURL(blob);
+
+          try {
+            currentModel = await ifcLoader.loadAsync(objectUrl);
+          } finally {
+            URL.revokeObjectURL(objectUrl);
+          }
+
+          if (!currentModel) {
+            throw new Error("IFC parsing returned no mesh.");
+          }
+
+          scene.add(currentModel);
+          frameModel(currentModel);
+          parent.postMessage({ type: "viewer-fallback-loaded" }, "*");
+        } catch (error) {
+          parent.postMessage(
+            {
+              type: "viewer-fallback-error",
+              message: error?.message || "Unknown IFC fallback error",
+            },
+            "*",
+          );
+        }
+      });
+
+      parent.postMessage({ type: "viewer-fallback-ready" }, "*");
+    </script>
+  </body>
+</html>
