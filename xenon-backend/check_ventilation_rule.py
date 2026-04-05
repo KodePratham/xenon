@@ -266,8 +266,21 @@ def report_to_text(report: VentilationReport) -> str:
     return "\n".join(lines)
 
 
-def report_to_html(report: VentilationReport, generated_at: str) -> str:
+def report_to_html(
+    report: VentilationReport,
+    generated_at: str,
+    screenshot_cid: str | None = None,
+) -> str:
     result_color = "#1f7a1f" if report.result == "PASS" else "#b30000"
+    screenshot_block = ""
+    if screenshot_cid:
+        screenshot_block = f"""
+                <div style=\"margin-top:22px;\">
+                  <h2 style=\"font-size:16px; margin:0 0 10px 0;\">Structure Snapshot</h2>
+                  <p style=\"margin:0 0 10px 0; font-size:13px; color:#4b5563;\">Red overlay highlights non-compliant elements.</p>
+                  <img src=\"cid:{screenshot_cid}\" alt=\"Structure compliance screenshot\" style=\"width:100%; max-width:640px; border:1px solid #e5e7eb; border-radius:10px; display:block;\" />
+                </div>
+"""
     return f"""<!doctype html>
 <html>
   <head>
@@ -327,6 +340,7 @@ def report_to_html(report: VentilationReport, generated_at: str) -> str:
                     <td style="padding:10px; border:1px solid #e5e7eb;">{report.windows_missing_area} / {report.windows_found}</td>
                   </tr>
                 </table>
+{screenshot_block}
               </td>
             </tr>
           </table>
@@ -359,13 +373,32 @@ def send_report_email(report: VentilationReport, args: argparse.Namespace) -> No
     from_email = args.from_email or args.smtp_username
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     subject = f"{args.email_subject_prefix} | {report.result} | {report.ifc_path.name}"
+    screenshot_bytes = getattr(args, "screenshot_bytes", None)
+    screenshot_filename = getattr(args, "screenshot_filename", "xenon-structure.png")
 
     message = EmailMessage()
     message["Subject"] = subject
     message["From"] = from_email
     message["To"] = ", ".join(recipients)
     message.set_content(report_to_text(report))
-    message.add_alternative(report_to_html(report, generated_at), subtype="html")
+    screenshot_cid = "xenon-structure-snapshot" if screenshot_bytes else None
+    message.add_alternative(report_to_html(report, generated_at, screenshot_cid=screenshot_cid), subtype="html")
+    if screenshot_bytes:
+        html_part = message.get_payload()[-1]
+        html_part.add_related(
+            screenshot_bytes,
+            maintype="image",
+            subtype="png",
+            cid=f"<{screenshot_cid}>",
+            filename=screenshot_filename,
+            disposition="inline",
+        )
+        message.add_attachment(
+            screenshot_bytes,
+            maintype="image",
+            subtype="png",
+            filename=screenshot_filename,
+        )
 
     with smtplib.SMTP(args.smtp_host, args.smtp_port, timeout=30) as smtp:
         smtp.ehlo()

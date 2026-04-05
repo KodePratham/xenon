@@ -12,6 +12,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
 from check_ventilation_rule import (
+    VentilationReport,
     evaluate_ventilation,
     load_env_file,
     parse_recipients,
@@ -39,6 +40,46 @@ def read_env_direct(key: str, default: str = "") -> str:
 
 
 app = FastAPI(title="Xenon IFC Ventilation API", version="1.0.0")
+
+
+def build_smtp_args(final_recipients: list[str], email_subject_prefix: str) -> SimpleNamespace:
+    """Build SMTP/email arguments from current on-disk .env values."""
+    smtp_user = read_env_direct("SMTP_USERNAME")
+    smtp_pass = read_env_direct("SMTP_PASSWORD")
+    smtp_host = read_env_direct("SMTP_HOST", "smtp.gmail.com")
+    smtp_port = int(read_env_direct("SMTP_PORT", "587"))
+    smtp_from = read_env_direct("SMTP_FROM_EMAIL") or smtp_user
+    smtp_starttls = read_env_direct("SMTP_USE_STARTTLS", "true").lower() in {"1", "true", "yes", "y"}
+
+    return SimpleNamespace(
+        email_to=final_recipients,
+        smtp_host=smtp_host,
+        smtp_port=smtp_port,
+        smtp_username=smtp_user,
+        smtp_password=smtp_pass,
+        from_email=smtp_from,
+        email_subject_prefix=email_subject_prefix,
+        smtp_use_starttls=smtp_starttls,
+    )
+
+
+def report_from_payload(payload: dict, source_filename: str = "upload.ifc") -> VentilationReport:
+    """Reconstruct report dataclass from JSON payload returned by /analyze."""
+    return VentilationReport(
+        ifc_path=Path(source_filename),
+        schema=str(payload.get("schema", "UNKNOWN")),
+        rooms_found=int(payload.get("rooms_found", 0)),
+        windows_found=int(payload.get("windows_found", 0)),
+        total_room_area=float(payload.get("total_room_area", 0.0)),
+        total_window_area=float(payload.get("total_window_area", 0.0)),
+        ventilation_percent=float(payload.get("ventilation_percent", 0.0)),
+        spaces_missing_area=int(payload.get("spaces_missing_area", 0)),
+        windows_missing_area=int(payload.get("windows_missing_area", 0)),
+        status=str(payload.get("status", "Evaluation completed.")),
+        result=str(payload.get("result", "FAIL")),
+        threshold_percent=float(payload.get("threshold_percent", 10.0)),
+        window_ids=list(payload.get("window_ids") or []),
+    )
 
 
 async def generate_suggestions(report) -> list[dict]:
@@ -163,6 +204,7 @@ async def analyze_ifc(
     file: UploadFile = File(...),
     recipients: str = Form(""),
     email_subject_prefix: str = Form("Xenon Ventilation Report"),
+    send_email: bool = Form(True),
 ) -> dict:
     if file is None:
         raise HTTPException(status_code=400, detail="Please upload a file.")
@@ -187,47 +229,31 @@ async def analyze_ifc(
                 detail=f"Uploaded file could not be parsed as IFC: {parse_exc}",
             ) from parse_exc
 
-        # Always read credentials fresh from .env on disk — never trust os.environ
-        # which can be stale from server startup or uvicorn --reload.
-        smtp_user = read_env_direct("SMTP_USERNAME")
-        smtp_pass = read_env_direct("SMTP_PASSWORD")
-        smtp_host = read_env_direct("SMTP_HOST", "smtp.gmail.com")
-        smtp_port = int(read_env_direct("SMTP_PORT", "587"))
-        smtp_from = read_env_direct("SMTP_FROM_EMAIL") or smtp_user
-        smtp_starttls = read_env_direct("SMTP_USE_STARTTLS", "true").lower() in {"1", "true", "yes", "y"}
-        env_recipients = read_env_direct("REPORT_RECIPIENTS")
-
-        raw_recipients: list[str] = []
-        if recipients.strip():
-            raw_recipients.append(recipients)
-        elif env_recipients:
-            raw_recipients.append(env_recipients)
-
-        final_recipients = parse_recipients(raw_recipients)
-
-        smtp_args = SimpleNamespace(
-            email_to=final_recipients,
-            smtp_host=smtp_host,
-            smtp_port=smtp_port,
-            smtp_username=smtp_user,
-            smtp_password=smtp_pass,
-            from_email=smtp_from,
-            email_subject_prefix=email_subject_prefix,
-            smtp_use_starttls=smtp_starttls,
-        )
-
         email_sent = False
         email_error = None
-        if not final_recipients:
-            email_error = "No recipients — enter email addresses in the frontend or set REPORT_RECIPIENTS in .env"
-        elif not smtp_user or not smtp_pass:
-            email_error = "SMTP not configured — set SMTP_USERNAME and SMTP_PASSWORD in .env"
-        else:
-            try:
-                send_report_email(report, smtp_args)
-                email_sent = True
-            except Exception as e:
-                email_error = f"SMTP send failed: {type(e).__name__}: {e}"
+        final_recipients: list[str] = []
+        if send_email:
+            env_recipients = read_env_direct("REPORT_RECIPIENTS")
+
+            raw_recipients: list[str] = []
+            if recipients.strip():
+                raw_recipients.append(recipients)
+            elif env_recipients:
+                raw_recipients.append(env_recipients)
+
+            final_recipients = parse_recipients(raw_recipients)
+            smtp_args = build_smtp_args(final_recipients, email_subject_prefix)
+
+            if not final_recipients:
+                email_error = "No recipients — enter email addresses in the frontend or set REPORT_RECIPIENTS in .env"
+            elif not smtp_args.smtp_username or not smtp_args.smtp_password:
+                email_error = "SMTP not configured — set SMTP_USERNAME and SMTP_PASSWORD in .env"
+            else:
+                try:
+                    send_report_email(report, smtp_args)
+                    email_sent = True
+                except Exception as e:
+                    email_error = f"SMTP send failed: {type(e).__name__}: {e}"
 
         suggestions = await generate_suggestions(report)
 
@@ -260,3 +286,59 @@ async def analyze_ifc(
     finally:
         if temp_path and temp_path.exists():
             temp_path.unlink(missing_ok=True)
+
+
+@app.post("/send-email")
+async def send_email(
+    report_json: str = Form(...),
+    recipients: str = Form(""),
+    email_subject_prefix: str = Form("Xenon Ventilation Report"),
+    source_filename: str = Form("upload.ifc"),
+    screenshot: UploadFile | None = File(None),
+) -> dict:
+    try:
+        parsed = json.loads(report_json)
+        if not isinstance(parsed, dict):
+            raise HTTPException(status_code=400, detail="report_json must be a JSON object.")
+
+        report = report_from_payload(parsed, source_filename=source_filename)
+
+        env_recipients = read_env_direct("REPORT_RECIPIENTS")
+        raw_recipients: list[str] = []
+        if recipients.strip():
+            raw_recipients.append(recipients)
+        elif env_recipients:
+            raw_recipients.append(env_recipients)
+
+        final_recipients = parse_recipients(raw_recipients)
+        if not final_recipients:
+            raise HTTPException(
+                status_code=400,
+                detail="No recipients provided. Set recipients in request or REPORT_RECIPIENTS in .env.",
+            )
+
+        smtp_args = build_smtp_args(final_recipients, email_subject_prefix)
+        if not smtp_args.smtp_username or not smtp_args.smtp_password:
+            raise HTTPException(
+                status_code=400,
+                detail="SMTP not configured. Set SMTP_USERNAME and SMTP_PASSWORD in .env.",
+            )
+
+        screenshot_bytes = await screenshot.read() if screenshot else None
+        if screenshot_bytes:
+            smtp_args.screenshot_bytes = screenshot_bytes
+            smtp_args.screenshot_filename = (screenshot.filename or "xenon-structure.png")
+
+        send_report_email(report, smtp_args)
+        return {
+            "ok": True,
+            "email_sent_to": final_recipients,
+            "screenshot_attached": bool(screenshot_bytes),
+            "report_text": report_to_text(report),
+        }
+    except HTTPException:
+        raise
+    except json.JSONDecodeError as decode_error:
+        raise HTTPException(status_code=400, detail=f"Invalid report_json: {decode_error}") from decode_error
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc

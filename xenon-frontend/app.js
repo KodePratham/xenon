@@ -310,15 +310,62 @@ function renderReport(report) {
   });
 }
 
+function nextFrame() {
+  return new Promise(resolve => requestAnimationFrame(() => resolve()));
+}
+
+async function captureViewerScreenshotBlob() {
+  if (!renderer?.domElement) {
+    return null;
+  }
+  await nextFrame();
+  await nextFrame();
+  return new Promise(resolve => {
+    renderer.domElement.toBlob(blob => resolve(blob), "image/png");
+  });
+}
+
+async function sendComplianceEmail({
+  apiBase,
+  report,
+  recipients,
+  subjectPrefix,
+  sourceFilename,
+  screenshotBlob,
+}) {
+  const fd = new FormData();
+  fd.append("report_json", JSON.stringify(report));
+  fd.append("recipients", recipients);
+  fd.append("email_subject_prefix", subjectPrefix);
+  fd.append("source_filename", sourceFilename || "upload.ifc");
+  if (screenshotBlob) {
+    fd.append("screenshot", screenshotBlob, "xenon-structure.png");
+  }
+
+  const response = await fetch(apiBase + "/send-email", {
+    method: "POST",
+    body: fd,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "Email send failed");
+  }
+  return data;
+}
+
 runReportBtn.addEventListener("click", async () => {
   if (!selectedFile) { setStatus("Upload an IFC file first.", "error"); return; }
   const apiBase = apiUrlInput.value.trim().replace(/\/$/, "");
   if (!apiBase) { setStatus("Provide the backend API URL.", "error"); return; }
+  const recipients = emailsInput.value.trim();
+  const subjectPrefix = subjectPrefixInput.value.trim();
   setStatus("Generating report...", "running");
   const fd = new FormData();
   fd.append("file", selectedFile);
-  fd.append("recipients", emailsInput.value.trim());
-  fd.append("email_subject_prefix", subjectPrefixInput.value.trim());
+  // Analyze first without emailing, so we can color non-compliance in red and capture it.
+  fd.append("recipients", "");
+  fd.append("email_subject_prefix", subjectPrefix);
+  fd.append("send_email", "false");
   try {
     const r = await fetch(apiBase + "/analyze", { method: "POST", body: fd });
     const d = await r.json();
@@ -328,13 +375,19 @@ runReportBtn.addEventListener("click", async () => {
     renderSuggestions(d.suggestions || []);
     reportText.textContent = d.report_text;
     reportContainer.classList.remove("hidden");
-    if (d.email_sent_to && d.email_sent_to.length > 0) {
-      setStatus("Report ready — emailed to: " + d.email_sent_to.join(", "), "success");
-    } else if (d.email_error) {
-      setStatus("⚠ Report ready but email failed: " + d.email_error, "running");
-    } else {
-      setStatus("Report ready!", "success");
-    }
+
+    setStatus("Capturing red-marked screenshot for email...", "running");
+    const screenshotBlob = await captureViewerScreenshotBlob();
+    const emailResp = await sendComplianceEmail({
+      apiBase,
+      report: d.report,
+      recipients,
+      subjectPrefix,
+      sourceFilename: selectedFile.name,
+      screenshotBlob,
+    });
+    const screenshotSuffix = emailResp.screenshot_attached ? " (with screenshot)" : " (without screenshot)";
+    setStatus("Report ready — emailed to: " + emailResp.email_sent_to.join(", ") + screenshotSuffix, "success");
   } catch (err) {
     console.error(err);
     setStatus("Request failed: " + err.message, "error");
