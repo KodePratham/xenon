@@ -228,10 +228,6 @@ async function loadIfcFile(file) {
 /* ─── File handler ─── */
 async function handleFile(file) {
   if (!file) return;
-  if (!file.name.toLowerCase().endsWith(".ifc")) {
-    setStatus("Only .ifc files are supported.", "error");
-    return;
-  }
   selectedFile = file;
   selectedFileEl.textContent = "Selected: " + file.name;
   setStatus("Loading 3D preview...", "running");

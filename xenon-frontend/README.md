@@ -24,11 +24,11 @@ cd d:\Hackathons\xenon\xenon-frontend
 npm install
 ```
 
-3. Serve this folder as static files (any local static server works). Example using Python:
+3. Start the frontend with Vite (required for ES module imports like `three` and `web-ifc`):
 
 ```powershell
 cd d:\Hackathons\xenon\xenon-frontend
-python -m http.server 5500
+npx vite --host 0.0.0.0 --port 5500
 ```
 
 4. Open:

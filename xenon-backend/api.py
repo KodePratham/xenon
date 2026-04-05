@@ -164,8 +164,8 @@ async def analyze_ifc(
     recipients: str = Form(""),
     email_subject_prefix: str = Form("Xenon Ventilation Report"),
 ) -> dict:
-    if not file.filename or not file.filename.lower().endswith(".ifc"):
-        raise HTTPException(status_code=400, detail="Please upload a valid .ifc file.")
+    if file is None:
+        raise HTTPException(status_code=400, detail="Please upload a file.")
 
     temp_path: Path | None = None
     try:
@@ -173,11 +173,19 @@ async def analyze_ifc(
         if not payload:
             raise HTTPException(status_code=400, detail="Uploaded file is empty.")
 
-        with NamedTemporaryFile(delete=False, suffix=".ifc") as temp_file:
+        upload_name = (file.filename or "upload.ifc").strip() or "upload.ifc"
+        suffix = Path(upload_name).suffix or ".ifc"
+        with NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
             temp_file.write(payload)
             temp_path = Path(temp_file.name)
 
-        report = evaluate_ventilation(temp_path)
+        try:
+            report = evaluate_ventilation(temp_path)
+        except Exception as parse_exc:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Uploaded file could not be parsed as IFC: {parse_exc}",
+            ) from parse_exc
 
         # Always read credentials fresh from .env on disk — never trust os.environ
         # which can be stale from server startup or uvicorn --reload.
@@ -241,7 +249,7 @@ async def analyze_ifc(
                 "status": report.status,
                 "result": report.result,
                 "threshold_percent": report.threshold_percent,
-                "source_filename": file.filename,
+                "source_filename": upload_name,
                 "window_ids": report.window_ids,
             },
         }
