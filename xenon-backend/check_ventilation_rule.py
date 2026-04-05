@@ -375,6 +375,8 @@ def send_report_email(report: VentilationReport, args: argparse.Namespace) -> No
     subject = f"{args.email_subject_prefix} | {report.result} | {report.ifc_path.name}"
     screenshot_bytes = getattr(args, "screenshot_bytes", None)
     screenshot_filename = getattr(args, "screenshot_filename", "xenon-structure.png")
+    ifc_bytes = getattr(args, "ifc_bytes", None)
+    ifc_filename = getattr(args, "ifc_filename", "ai-fixed.ifc")
 
     message = EmailMessage()
     message["Subject"] = subject
@@ -398,6 +400,13 @@ def send_report_email(report: VentilationReport, args: argparse.Namespace) -> No
             maintype="image",
             subtype="png",
             filename=screenshot_filename,
+        )
+    if ifc_bytes:
+        message.add_attachment(
+            ifc_bytes,
+            maintype="application",
+            subtype="octet-stream",
+            filename=ifc_filename,
         )
 
     with smtplib.SMTP(args.smtp_host, args.smtp_port, timeout=30) as smtp:

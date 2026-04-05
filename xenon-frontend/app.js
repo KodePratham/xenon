@@ -13,6 +13,7 @@ const dropZone = document.getElementById("drop-zone");
 const fileInput = document.getElementById("ifc-input");
 const selectedFileEl = document.getElementById("selected-file");
 const runReportBtn = document.getElementById("run-report");
+const tryFixAiBtn = document.getElementById("try-fix-ai");
 const extractJsonBtn = document.getElementById("extract-json");
 const statusEl = document.getElementById("status");
 const reportContainer = document.getElementById("report");
@@ -32,6 +33,7 @@ let selectedFile = null;
 let scene, camera, renderer, controls;
 let viewerInitialized = false;
 let extractedIfcJson = null;
+let lastReport = null;
 
 function setStatus(msg, kind) {
   statusEl.textContent = msg;
@@ -235,6 +237,8 @@ async function loadIfcFile(file) {
 async function handleFile(file) {
   if (!file) return;
   selectedFile = file;
+  lastReport = null;
+  tryFixAiBtn.disabled = true;
   selectedFileEl.textContent = "Selected: " + file.name;
   setStatus("Loading 3D preview...", "running");
   try {
@@ -371,6 +375,44 @@ function downloadTextFile(filename, content) {
   URL.revokeObjectURL(url);
 }
 
+function downloadBinaryFile(filename, bytes, mimeType) {
+  const blob = new Blob([bytes], { type: mimeType || "application/octet-stream" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function base64ToUint8Array(base64) {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function requestAiFix(apiBase, file, recipients, subjectPrefix) {
+  const fd = new FormData();
+  fd.append("file", file);
+  fd.append("recipients", recipients);
+  fd.append("email_subject_prefix", subjectPrefix || "Xenon AI IFC Fix");
+
+  const response = await fetch(apiBase + "/try-fix-ai", {
+    method: "POST",
+    body: fd,
+  });
+  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(data.detail || "AI fix failed");
+  }
+  return data;
+}
+
 async function extractIfcJson(apiBase, file) {
   const fd = new FormData();
   fd.append("file", file);
@@ -413,6 +455,7 @@ runReportBtn.addEventListener("click", async () => {
     const d = await r.json();
     if (!r.ok) throw new Error(d.detail || "Server error");
     renderReport(d.report);
+    lastReport = d.report;
     applyReportColors(d.report);
     renderSuggestions(d.suggestions || []);
     reportText.textContent = d.report_text;
@@ -430,9 +473,54 @@ runReportBtn.addEventListener("click", async () => {
     });
     const screenshotSuffix = emailResp.screenshot_attached ? " (with screenshot)" : " (without screenshot)";
     setStatus("Report ready — emailed to: " + emailResp.email_sent_to.join(", ") + screenshotSuffix, "success");
+    tryFixAiBtn.disabled = false;
   } catch (err) {
     console.error(err);
     setStatus("Request failed: " + err.message, "error");
+  }
+});
+
+tryFixAiBtn.addEventListener("click", async () => {
+  if (!selectedFile) {
+    setStatus("Upload an IFC file first.", "error");
+    return;
+  }
+  if (!lastReport) {
+    setStatus("Run evaluation first, then try AI fix.", "error");
+    return;
+  }
+
+  const apiBase = apiUrlInput.value.trim().replace(/\/$/, "");
+  if (!apiBase) {
+    setStatus("Provide the backend API URL.", "error");
+    return;
+  }
+
+  const recipients = emailsInput.value.trim();
+  const subjectPrefix = subjectPrefixInput.value.trim() || "Xenon AI IFC Fix";
+  setStatus("Running AI fix for windows with Groq...", "running");
+
+  try {
+    const fixData = await requestAiFix(apiBase, selectedFile, recipients, subjectPrefix);
+    renderReport(fixData.fixed_report);
+    applyReportColors(fixData.fixed_report);
+    reportText.textContent = fixData.report_text;
+    reportContainer.classList.remove("hidden");
+
+    const fixedBytes = base64ToUint8Array(fixData.fixed_ifc_base64);
+    const fixedFile = new File([fixedBytes], fixData.fixed_ifc_filename, { type: "application/octet-stream" });
+    await handleFile(fixedFile);
+
+    const scaleNote = "scale=" + (fixData.fix_meta?.window_area_scale ?? "n/a");
+    const emailNote = fixData.email_sent_to?.length
+      ? " mailed to: " + fixData.email_sent_to.join(", ")
+      : (fixData.email_error ? " mail: " + fixData.email_error : "");
+    setStatus("AI fix complete, IFC saved at backend and preview loaded (" + scaleNote + ")." + emailNote, "success");
+
+    downloadBinaryFile(fixData.fixed_ifc_filename, fixedBytes, "application/octet-stream");
+  } catch (err) {
+    console.error(err);
+    setStatus("AI fix failed: " + err.message, "error");
   }
 });
 
